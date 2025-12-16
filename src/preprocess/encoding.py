@@ -41,6 +41,78 @@ class FrequencyEncoder:
         return self.fit(df).transform(df)
 
 
+class TargetEncoder:
+    """
+    Target encoding (mean encoding) that fits on training data only to prevent data leakage.
+    Uses smoothing to handle rare categories and prevent overfitting.
+    """
+    def __init__(self, column_name, smoothing=10, target_col='price'):
+        """
+        Initialize target encoder.
+        
+        Parameters:
+        -----------
+        column_name : str
+            Name of the categorical column to encode
+        smoothing : float
+            Smoothing parameter. Higher values = more weight to global mean.
+            Prevents overfitting on rare categories.
+        target_col : str
+            Name of the target column (default: 'price')
+        """
+        self.column_name = column_name
+        self.smoothing = smoothing
+        self.target_col = target_col
+        self.mean_map = {}
+        self.global_mean = None
+        self.fitted = False
+    
+    def fit(self, df):
+        """Compute mean target per category from training data only."""
+        if self.column_name not in df.columns or self.target_col not in df.columns:
+            self.fitted = True
+            return self
+        
+        # Compute global mean
+        self.global_mean = df[self.target_col].mean()
+        
+        # Compute category means and counts
+        category_stats = df.groupby(self.column_name)[self.target_col].agg(['mean', 'count'])
+        
+        # Apply smoothing: blend category mean with global mean
+        for cat in category_stats.index:
+            cat_mean = category_stats.loc[cat, 'mean']
+            cat_count = category_stats.loc[cat, 'count']
+            # Smoothing formula: (mean * n + global_mean * smoothing) / (n + smoothing)
+            self.mean_map[cat] = (cat_mean * cat_count + self.global_mean * self.smoothing) / (cat_count + self.smoothing)
+        
+        self.fitted = True
+        return self
+    
+    def transform(self, df):
+        """Apply target encoding to data."""
+        if not self.fitted:
+            raise ValueError("Must call fit() before transform()")
+        
+        df = df.copy()
+        if self.column_name not in df.columns:
+            return df
+        
+        # Create encoded column
+        enc_col_name = f"{self.column_name}_target_enc"
+        # Map categories, use global mean for unseen values
+        df[enc_col_name] = df[self.column_name].map(self.mean_map).fillna(self.global_mean)
+        
+        # Keep original column (models like CatBoost/LightGBM can use it natively)
+        # For XGBoost, we'll drop it later if needed
+        
+        return df
+    
+    def fit_transform(self, df):
+        """Fit and transform in one step."""
+        return self.fit(df).transform(df)
+
+
 class OneHotEncoder:
     """
     One-hot encoding that fits on training data to ensure consistent columns.
